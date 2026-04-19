@@ -19,7 +19,9 @@
 
 #pragma comment(lib, "runtimeobject.lib")
 
-// IDirect3DDxgiInterfaceAccess is not reliably exposed by the interop header in all SDK configs
+// IDirect3DDxgiInterfaceAccess is not reliably exposed by the interop header
+// in all SDK configurations. We provide the definition when missing so we can
+// convert WinRT capture surfaces back into native D3D11 textures.
 #ifndef __IDirect3DDxgiInterfaceAccess_INTERFACE_DEFINED__
 #define __IDirect3DDxgiInterfaceAccess_INTERFACE_DEFINED__
 // Official COM IID for IDirect3DDxgiInterfaceAccess (Windows SDK); used by QueryInterface/.as<>.
@@ -41,12 +43,15 @@ namespace wgd3 = winrt::Windows::Graphics::DirectX::Direct3D11;
 
 class WindowCapture_WGC : public WindowCapture
 {
+    // Native D3D11 objects used for GPU work and CPU readback.
     ComPtr<ID3D11Device>        m_device;
     ComPtr<ID3D11DeviceContext> m_context;
     ComPtr<ID3D11Texture2D>     m_stagingTexture;
     int m_stagingWidth  = 0;
     int m_stagingHeight = 0;
 
+    // WinRT capture objects required by Windows.Graphics.Capture.
+    // m_rtDevice wraps the native DXGI device for WinRT APIs.
     wgd3::IDirect3DDevice           m_rtDevice  { nullptr };
     wgc::GraphicsCaptureItem        m_item      { nullptr };
     wgc::Direct3D11CaptureFramePool m_framePool { nullptr };
@@ -61,6 +66,7 @@ class WindowCapture_WGC : public WindowCapture
 
     bool initDevice()
     {
+        // WGC delivers BGRA data, so the D3D device must support BGRA surfaces.
         HRESULT hr = D3D11CreateDevice(
             nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -69,6 +75,7 @@ class WindowCapture_WGC : public WindowCapture
         );
         if (FAILED(hr)) { return false; }
 
+        // WGC is a WinRT API, so we bridge native DXGI -> WinRT IDirect3DDevice.
         ComPtr<IDXGIDevice> dxgiDevice;
         if (FAILED(m_device.As(&dxgiDevice))) { return false; }
 
@@ -84,11 +91,15 @@ class WindowCapture_WGC : public WindowCapture
 
     bool initCapture(HWND hwnd)
     {
+        // Start from a clean state whenever the target window changes.
         stopCapture();
         if (!m_device || !m_rtDevice) { return false; }
 
         try
         {
+            // GraphicsCaptureItem has no plain HWND constructor.
+            // IGraphicsCaptureItemInterop::CreateForWindow is the COM bridge that
+            // turns a Win32 HWND into a WinRT capture item.
             auto interop = winrt::get_activation_factory<wgc::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
             interop->CreateForWindow(hwnd, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(m_item));
         }
@@ -104,6 +115,9 @@ class WindowCapture_WGC : public WindowCapture
         m_poolWidth  = size.Width;
         m_poolHeight = size.Height;
 
+        // CreateFreeThreaded avoids requiring a dispatcher thread; we poll frames
+        // from capture() instead of subscribing to frame-arrived callbacks.
+        // Buffer count 2 is a simple double-buffered setup.
         m_framePool = wgc::Direct3D11CaptureFramePool::CreateFreeThreaded(
             m_rtDevice,
             wgdd::DirectXPixelFormat::B8G8R8A8UIntNormalized,
@@ -111,6 +125,9 @@ class WindowCapture_WGC : public WindowCapture
             size
         );
         m_session = m_framePool.CreateCaptureSession(m_item);
+
+        // These toggles can fail on older Windows versions or restricted targets.
+        // We treat them as best-effort options and keep capture running.
         try { m_session.IsBorderRequired(m_borderRequired);    } catch (...) {}
         try { m_session.IsCursorCaptureEnabled(m_cursorEnabled); } catch (...) {}
         m_session.StartCapture();
@@ -121,6 +138,8 @@ class WindowCapture_WGC : public WindowCapture
 
     void stopCapture()
     {
+        // Close in top-down ownership order.
+        // Session depends on frame pool, and both depend on item.
         if (m_session)   { m_session.Close();   m_session   = nullptr; }
         if (m_framePool) { m_framePool.Close();  m_framePool = nullptr; }
         m_item         = nullptr;
@@ -132,6 +151,8 @@ class WindowCapture_WGC : public WindowCapture
         if (m_stagingTexture && m_stagingWidth == width && m_stagingHeight == height)
             return true;
 
+        // Staging texture is CPU-readable memory. We copy GPU capture frames into
+        // it before mapping so OpenCV can access raw pixels.
         D3D11_TEXTURE2D_DESC desc = {};
         desc.Width          = (UINT)width;
         desc.Height         = (UINT)height;
@@ -158,6 +179,8 @@ public:
     WindowCapture_WGC()
     {
         m_captureMethod = CaptureMethod::WGC;
+        // WGC and C++/WinRT calls require a COM apartment.
+        // Multi-threaded apartment is suitable for this polling/capture path.
         try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
         initDevice();
     }
@@ -188,11 +211,13 @@ public:
 
         if (!m_device || !m_rtDevice) { return m_image; }
 
+        // Recreate capture session when switching to a different target window.
         if (info.hwnd != m_capturedHwnd)
         {
             if (!initCapture(info.hwnd)) { return m_image; }
         }
 
+        // Non-blocking fetch. If no frame is ready yet, return the previous image.
         auto frame = m_framePool.TryGetNextFrame();
         if (!frame)
         {
@@ -204,6 +229,8 @@ public:
         int w = contentSize.Width;
         int h = contentSize.Height;
 
+        // Frame pool size is fixed at creation time. If the captured content size
+        // changes (resize/DPI changes), recreate capture objects with new size.
         if (w != m_poolWidth || h != m_poolHeight)
         {
             frame.Close();
@@ -212,6 +239,8 @@ public:
             return m_image;
         }
 
+        // WGC gives a WinRT IDirect3DSurface; convert it back to a native
+        // ID3D11Texture2D so we can issue D3D copy/map calls.
         auto dxgiAccess = frame.Surface().as<IDirect3DDxgiInterfaceAccess>();
         ComPtr<ID3D11Texture2D> frameTex;
         if (FAILED(dxgiAccess->GetInterface(IID_PPV_ARGS(&frameTex))))
@@ -221,6 +250,7 @@ public:
 
         if (ensureStagingTexture(w, h))
         {
+            // Copy full frame from GPU texture into CPU-readable staging texture.
             D3D11_BOX box = { 0, 0, 0, (UINT)w, (UINT)h, 1 };
             m_context->CopySubresourceRegion(
                 m_stagingTexture.Get(), 0, 0, 0, 0,
@@ -232,12 +262,16 @@ public:
             {
                 m_image.create(h, w, CV_8UC4);
                 const UINT rowBytes = (UINT)(w * 4);
+
+                // Fast path when texture rows are tightly packed.
                 if (mapped.RowPitch == rowBytes)
                 {
                     std::memcpy(m_image.data, mapped.pData, (size_t)h * rowBytes);
                 }
                 else
                 {
+                    // Common path on many drivers: each row may include padding.
+                    // Copy row-by-row to strip GPU pitch padding into contiguous cv::Mat rows.
                     for (int row = 0; row < h; ++row)
                     {
                         const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + row * mapped.RowPitch;
