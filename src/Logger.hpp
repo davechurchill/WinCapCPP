@@ -14,14 +14,6 @@ class Logger
         m_fout.open(m_logFileName, std::ios::out | std::ios::binary);
     }
 
-    ~Logger()
-    {
-        if (m_fout.is_open())
-        {
-            m_fout.flush();
-        }
-    }
-
 public:
 
     static Logger& Instance()
