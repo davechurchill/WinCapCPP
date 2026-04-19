@@ -4,6 +4,8 @@
 #include <opencv2/opencv.hpp>
 #include <sstream>
 
+#include "Logger.hpp"
+
 struct WindowInfo
 {
     HWND hwnd = nullptr;
@@ -152,7 +154,11 @@ struct WindowInfo
         MONITORINFO mi = { sizeof(mi) };
 
         // get basic info about the monitor
-        if (!GetMonitorInfo(info.monitorHandle, &mi)) { std::cerr << "Failed to get monitor info" << std::endl; return info; }
+        if (!GetMonitorInfo(info.monitorHandle, &mi))
+        {
+            CapLog() << "WindowInfo: GetMonitorInfo failed with error: " << GetLastError() << "\n";
+            return info;
+        }
         info.monitorInfo = mi;
         info.monitorX = mi.rcMonitor.left;
         info.monitorY = mi.rcMonitor.top;
@@ -163,7 +169,11 @@ struct WindowInfo
         monitorInfo.cbSize = sizeof(MONITORINFOEX);
 
         // get specific info about the monitor
-        if (!GetMonitorInfo(info.monitorHandle, &monitorInfo)) { std::cerr << "Failed to get monitorex info." << std::endl; return info; }
+        if (!GetMonitorInfo(info.monitorHandle, &monitorInfo))
+        {
+            CapLog() << "WindowInfo: GetMonitorInfoEx failed with error: " << GetLastError() << "\n";
+            return info;
+        }
         wcsncpy_s(info.monitorName, monitorInfo.szDevice, _TRUNCATE);
 
         DISPLAY_DEVICE displayDevice = {};

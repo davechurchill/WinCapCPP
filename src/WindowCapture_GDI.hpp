@@ -215,13 +215,11 @@ public:
         if (mse > 500)
         {
             setCaptureMethod(CaptureMethod::GDI_PrintWindow);
-            CapLog() << "Capture Method: PrintWindow (mse = " << mse << ")\n";
         }
         // otherwise BitBlt is fine to use
         else
         {
             setCaptureMethod(CaptureMethod::GDI_BitBlt);
-            CapLog() << "Capture Method: BitBlt (mse = " << mse << ")\n";
         }
     }
 };

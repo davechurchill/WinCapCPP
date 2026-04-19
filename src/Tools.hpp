@@ -3,9 +3,10 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cctype>
-#include <iostream>
 #include <string>
 #include <vector>
+
+#include "Logger.hpp"
 
 
 std::string GetWindowTitle(HWND hwnd)
@@ -61,18 +62,17 @@ void PrintMonitorInfo()
     DISPLAY_DEVICE displayDevice;
     displayDevice.cb = sizeof(DISPLAY_DEVICE);
 
-    for (DWORD deviceIndex = 0; EnumDisplayDevices(NULL, deviceIndex, &displayDevice, 0); ++deviceIndex) {
-        if (!(displayDevice.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)) {
+    for (DWORD deviceIndex = 0; EnumDisplayDevices(NULL, deviceIndex, &displayDevice, 0); ++deviceIndex)
+    {
+        if (!(displayDevice.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER))
+        {
             DEVMODE devMode;
             devMode.dmSize = sizeof(DEVMODE);
 
-            if (EnumDisplaySettings(displayDevice.DeviceName, ENUM_CURRENT_SETTINGS, &devMode)) {
-                std::cout << "Monitor:    " << deviceIndex << "\n";
-                std::wcout << "Name:       " << displayDevice.DeviceName << std::endl;
-                std::cout << "Resolution: " << devMode.dmPelsWidth << "x" << devMode.dmPelsHeight << std::endl;
-                std::cout << "Top-left:   (" << devMode.dmPosition.x << ", " << devMode.dmPosition.y << ")" << std::endl;
-
-                std::cout << std::endl;
+            if (!EnumDisplaySettings(displayDevice.DeviceName, ENUM_CURRENT_SETTINGS, &devMode))
+            {
+                CapLog() << "Tools: EnumDisplaySettings failed for monitor index "
+                         << deviceIndex << " with error: " << GetLastError() << "\n";
             }
         }
     }

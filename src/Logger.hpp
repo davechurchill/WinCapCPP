@@ -1,7 +1,6 @@
 #pragma once
 
 #include <fstream>
-#include <iostream>
 #include <sstream>
 #include <string>
 
@@ -13,10 +12,6 @@ class Logger
     Logger()
     {
         m_fout.open(m_logFileName, std::ios::out | std::ios::binary);
-        if (!m_fout.is_open())
-        {
-            std::cerr << "Failed to open log file: " << m_logFileName << '\n';
-        }
     }
 
     ~Logger()
