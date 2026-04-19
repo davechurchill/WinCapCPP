@@ -39,3 +39,7 @@
 
 # debug information files
 *.dwo
+/visualstudio/.vs
+/visualstudio/CaptureOpenCV
+visualstudio/log.txt
+bin/log.txt

@@ -1,0 +1,260 @@
+#pragma once
+
+#include "WindowCapture.hpp"
+#include "Timer.hpp"
+#include "Logger.hpp"
+
+#include <d3d11.h>
+#include <wrl/client.h>
+#include <algorithm>
+#include <cstring>
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+#include <windows.graphics.capture.interop.h>
+#include <windows.graphics.directx.direct3d11.interop.h>
+
+#pragma comment(lib, "runtimeobject.lib")
+
+// IDirect3DDxgiInterfaceAccess is not reliably exposed by the interop header in all SDK configs
+#ifndef __IDirect3DDxgiInterfaceAccess_INTERFACE_DEFINED__
+#define __IDirect3DDxgiInterfaceAccess_INTERFACE_DEFINED__
+// Official COM IID for IDirect3DDxgiInterfaceAccess (Windows SDK); used by QueryInterface/.as<>.
+MIDL_INTERFACE("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1")
+IDirect3DDxgiInterfaceAccess : public IUnknown
+{
+public:
+    virtual HRESULT STDMETHODCALLTYPE GetInterface(REFIID iid, void** p) = 0;
+};
+#endif
+
+using std::min;
+using std::max;
+using Microsoft::WRL::ComPtr;
+
+namespace wgc  = winrt::Windows::Graphics::Capture;
+namespace wgdd = winrt::Windows::Graphics::DirectX;
+namespace wgd3 = winrt::Windows::Graphics::DirectX::Direct3D11;
+
+class WindowCapture_WGC : public WindowCapture
+{
+    ComPtr<ID3D11Device>        m_device;
+    ComPtr<ID3D11DeviceContext> m_context;
+    ComPtr<ID3D11Texture2D>     m_stagingTexture;
+    int m_stagingWidth  = 0;
+    int m_stagingHeight = 0;
+
+    wgd3::IDirect3DDevice           m_rtDevice  { nullptr };
+    wgc::GraphicsCaptureItem        m_item      { nullptr };
+    wgc::Direct3D11CaptureFramePool m_framePool { nullptr };
+    wgc::GraphicsCaptureSession     m_session   { nullptr };
+
+    HWND m_capturedHwnd = nullptr;
+    int  m_poolWidth    = 0;
+    int  m_poolHeight   = 0;
+
+    bool m_borderRequired = false;
+    bool m_cursorEnabled  = false;
+
+    bool initDevice()
+    {
+        HRESULT hr = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            nullptr, 0, D3D11_SDK_VERSION,
+            &m_device, nullptr, &m_context
+        );
+        if (FAILED(hr)) { return false; }
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        if (FAILED(m_device.As(&dxgiDevice))) { return false; }
+
+        ComPtr<IInspectable> inspectable;
+        hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), &inspectable);
+        if (FAILED(hr)) { return false; }
+
+        winrt::com_ptr<::IInspectable> rtInspectable;
+        rtInspectable.copy_from(inspectable.Get());
+        m_rtDevice = rtInspectable.as<wgd3::IDirect3DDevice>();
+        return m_rtDevice != nullptr;
+    }
+
+    bool initCapture(HWND hwnd)
+    {
+        stopCapture();
+        if (!m_device || !m_rtDevice) { return false; }
+
+        try
+        {
+            auto interop = winrt::get_activation_factory<wgc::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+            interop->CreateForWindow(hwnd, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(m_item));
+        }
+        catch (...)
+        {
+            CapLog() << "WGC: CreateForWindow failed\n";
+            return false;
+        }
+
+        if (!m_item) { return false; }
+
+        auto size    = m_item.Size();
+        m_poolWidth  = size.Width;
+        m_poolHeight = size.Height;
+
+        m_framePool = wgc::Direct3D11CaptureFramePool::CreateFreeThreaded(
+            m_rtDevice,
+            wgdd::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2,
+            size
+        );
+        m_session = m_framePool.CreateCaptureSession(m_item);
+        try { m_session.IsBorderRequired(m_borderRequired);    } catch (...) {}
+        try { m_session.IsCursorCaptureEnabled(m_cursorEnabled); } catch (...) {}
+        m_session.StartCapture();
+
+        m_capturedHwnd = hwnd;
+        return true;
+    }
+
+    void stopCapture()
+    {
+        if (m_session)   { m_session.Close();   m_session   = nullptr; }
+        if (m_framePool) { m_framePool.Close();  m_framePool = nullptr; }
+        m_item         = nullptr;
+        m_capturedHwnd = nullptr;
+    }
+
+    bool ensureStagingTexture(int width, int height)
+    {
+        if (m_stagingTexture && m_stagingWidth == width && m_stagingHeight == height)
+            return true;
+
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width          = (UINT)width;
+        desc.Height         = (UINT)height;
+        desc.MipLevels      = 1;
+        desc.ArraySize      = 1;
+        desc.Format         = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc     = { 1, 0 };
+        desc.Usage          = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+        m_stagingTexture.Reset();
+        if (FAILED(m_device->CreateTexture2D(&desc, nullptr, &m_stagingTexture)))
+        {
+            CapLog() << "WGC: CreateTexture2D (staging) failed\n";
+            return false;
+        }
+        m_stagingWidth  = width;
+        m_stagingHeight = height;
+        return true;
+    }
+
+public:
+
+    WindowCapture_WGC()
+    {
+        m_captureMethod = CaptureMethod::WGC;
+        try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+        initDevice();
+    }
+
+    ~WindowCapture_WGC()
+    {
+        stopCapture();
+    }
+
+    bool getBorderRequired() const { return m_borderRequired; }
+    bool getCursorEnabled()  const { return m_cursorEnabled;  }
+
+    void setBorderRequired(bool v)
+    {
+        m_borderRequired = v;
+        if (m_session) { try { m_session.IsBorderRequired(v);      } catch (...) {} }
+    }
+
+    void setCursorEnabled(bool v)
+    {
+        m_cursorEnabled = v;
+        if (m_session) { try { m_session.IsCursorCaptureEnabled(v); } catch (...) {} }
+    }
+
+    cv::Mat capture(const WindowInfo& info) override
+    {
+        Timer t;
+
+        if (!m_device || !m_rtDevice) { return m_image; }
+
+        if (info.hwnd != m_capturedHwnd)
+        {
+            if (!initCapture(info.hwnd)) { return m_image; }
+        }
+
+        auto frame = m_framePool.TryGetNextFrame();
+        if (!frame)
+        {
+            m_previousCaptureTimeMS = t.elapsedMS();
+            return m_image;
+        }
+
+        auto contentSize = frame.ContentSize();
+        int w = contentSize.Width;
+        int h = contentSize.Height;
+
+        if (w != m_poolWidth || h != m_poolHeight)
+        {
+            frame.Close();
+            initCapture(info.hwnd);
+            m_previousCaptureTimeMS = t.elapsedMS();
+            return m_image;
+        }
+
+        auto dxgiAccess = frame.Surface().as<IDirect3DDxgiInterfaceAccess>();
+        ComPtr<ID3D11Texture2D> frameTex;
+        if (FAILED(dxgiAccess->GetInterface(IID_PPV_ARGS(&frameTex))))
+        {
+            return m_image;
+        }
+
+        if (ensureStagingTexture(w, h))
+        {
+            D3D11_BOX box = { 0, 0, 0, (UINT)w, (UINT)h, 1 };
+            m_context->CopySubresourceRegion(
+                m_stagingTexture.Get(), 0, 0, 0, 0,
+                frameTex.Get(), 0, &box
+            );
+
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            if (SUCCEEDED(m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped)))
+            {
+                m_image.create(h, w, CV_8UC4);
+                const UINT rowBytes = (UINT)(w * 4);
+                if (mapped.RowPitch == rowBytes)
+                {
+                    std::memcpy(m_image.data, mapped.pData, (size_t)h * rowBytes);
+                }
+                else
+                {
+                    for (int row = 0; row < h; ++row)
+                    {
+                        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + row * mapped.RowPitch;
+                        std::memcpy(m_image.ptr(row), src, rowBytes);
+                    }
+                }
+                m_context->Unmap(m_stagingTexture.Get(), 0);
+            }
+        }
+
+        double elapsed = t.elapsedMS();
+        m_previousCaptureTimeMS = elapsed;
+        m_totalCaptures++;
+        m_totalCaptureTimeMS += elapsed;
+        if (elapsed > m_maxCaptureTimeMS) { m_maxCaptureTimeMS = elapsed; }
+        if (elapsed < m_minCaptureTimeMS) { m_minCaptureTimeMS = elapsed; }
+
+        return m_image;
+    }
+};

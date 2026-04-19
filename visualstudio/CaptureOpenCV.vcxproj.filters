@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="..\src\main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\CaptureGUI.hpp" />
+    <ClInclude Include="..\src\ExampleCapture.hpp" />
+    <ClInclude Include="..\src\Logger.hpp" />
+    <ClInclude Include="..\src\Timer.hpp" />
+    <ClInclude Include="..\src\Tools.hpp" />
+    <ClInclude Include="..\src\WindowCapture.hpp" />
+    <ClInclude Include="..\src\WindowCapture_DXGI.hpp" />
+    <ClInclude Include="..\src\WindowCapture_GDI.hpp" />
+    <ClInclude Include="..\src\WindowCapture_WGC.hpp" />
+    <ClInclude Include="..\src\WindowInfo.hpp" />
+  </ItemGroup>
+</Project>
