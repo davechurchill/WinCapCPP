@@ -8,17 +8,6 @@ Windows desktop/window capture demo in C++20 with OpenCV, featuring live backend
 
 This project is useful for testing capture reliability and performance across different window types and fullscreen modes.
 
-## Features
-
-- Real-time capture preview with `cv::imshow`
-- Keyboard-driven menu for selecting windows (`A-Z`)
-- Hot-switch capture backend at runtime (`1/2/3`)
-- GDI auto mode detection (`7`) and manual method toggle (`8`)
-- WGC border and cursor toggles (`5` / `6`)
-- Mouse-wheel zoom in capture view
-- On-screen capture timing overlay
-- Closing the OpenCV window with `X` exits the app cleanly
-
 ## Requirements
 
 - Windows 10/11
